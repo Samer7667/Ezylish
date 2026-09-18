@@ -292,6 +292,7 @@ footer b{color:var(--navy)}
       </div>
     </div>
 
+    <p class="sessionMeta">كل جلسة تشمل جميع كلمات النطاق المختار بترتيب عشوائي، دون تكرار داخل الجلسة. المطابقة تعرض 6 أزواج في كل مجموعة حتى اكتمال الجميع. مراجعة المستحق تشمل المستحق فقط، أو غير المتقن عند عدم وجود مستحق. إغلاق الجلسة ينهيها؛ بدء جلسة جديدة يعيد الكلمات من البداية.</p>
     <div class="modes">
       <button class="modeCard featured" onclick="startMode('smart')">
         <div class="modeIcon">⚡</div><h3>الجلسة الذكية</h3><p>مزيج تلقائي من المعنى والاستماع والكتابة والجمل لمفردات A2.</p>
@@ -327,7 +328,7 @@ footer b{color:var(--navy)}
         <div class="modeIcon">⏱️</div><h3>مراجعة سريعة</h3><p>قرار سريع: أعرفها أم تحتاج مراجعة؟</p>
       </button>
       <button class="modeCard" onclick="startMode('test')">
-        <div class="modeIcon">🏁</div><h3>اختبار متنوع</h3><p>اختبار قصير يجمع أكثر من طريقة لقياس التذكر.</p>
+        <div class="modeIcon">🏁</div><h3>اختبار متنوع</h3><p>اختبار يشمل كل كلمات النطاق المختار، بسؤال لكل كلمة.</p>
       </button>
     </div>
   </div>
@@ -423,7 +424,7 @@ let matchState=null;
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-const shuffle=a=>[...a].sort(()=>Math.random()-.5);
+const shuffle=a=>{const b=[...a];for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]]}return b};
 const dayMs=86400000;
 
 function load(){
@@ -491,11 +492,62 @@ function confetti(){
   }
 }
 function cleanWord(s){return String(s||'').trim().toLowerCase().replace(/[’']/g,"'").replace(/\s+/g,' ')}
-function speak(text,slow=false){
-  if(!('speechSynthesis' in window)){toast('النطق الصوتي غير مدعوم في هذا المتصفح');return}
-  speechSynthesis.cancel();
-  const u=new SpeechSynthesisUtterance(text);u.lang='en-US';u.rate=slow?.68:.9;speechSynthesis.speak(u);
+let activeUtterance=null;
+let speechWatchdog=null;
+let speechVoices=[];
+function refreshVoices(){
+  if('speechSynthesis' in window) speechVoices=window.speechSynthesis.getVoices();
 }
+if('speechSynthesis' in window){
+  refreshVoices();
+  window.speechSynthesis.addEventListener('voiceschanged',refreshVoices);
+}
+function audioStatus(message){
+  let box=$('audioStatus');
+  if(!box){
+    box=document.createElement('div');box.id='audioStatus';box.setAttribute('role','status');
+    box.style.cssText='position:fixed;bottom:85px;left:16px;right:16px;z-index:10000;padding:14px;background:#fff4dc;color:#573a00;border:1px solid #e9c779;border-radius:12px;text-align:center;box-shadow:0 4px 24px #0002';
+    box.onclick=()=>{box.hidden=true};document.body.appendChild(box);
+  }
+  box.textContent=message;box.hidden=!message;
+}
+function stopSpeech(){
+  activeUtterance=null;clearTimeout(speechWatchdog);
+  if('speechSynthesis' in window)window.speechSynthesis.cancel();
+}
+function speak(text,slow=false){
+  stopSpeech();audioStatus('');
+  if(!('speechSynthesis' in window)||!('SpeechSynthesisUtterance' in window)){
+    audioStatus('النطق غير متاح هنا. افتح ملف HTML في متصفح Chrome أو Edge أو Safari مباشرة، وليس داخل معاينة الملفات.');return;
+  }
+  refreshVoices();
+  const synth=window.speechSynthesis;
+  const u=new SpeechSynthesisUtterance(String(text));
+  const english=speechVoices.filter(v=>/^en[-_]/i.test(v.lang));
+  const voice=english.find(v=>v.lang==='en-US'&&v.localService)||english.find(v=>v.lang==='en-US')||english[0];
+  if(voice)u.voice=voice;
+  u.lang=voice?voice.lang:'en-US';u.rate=slow?0.68:0.9;u.volume=1;u.pitch=1;
+  activeUtterance=u;
+  u.onstart=()=>{if(activeUtterance===u){clearTimeout(speechWatchdog);audioStatus('')}};
+  u.onend=()=>{if(activeUtterance===u){clearTimeout(speechWatchdog);activeUtterance=null}};
+  u.onerror=e=>{
+    if(activeUtterance!==u)return;
+    clearTimeout(speechWatchdog);activeUtterance=null;
+    if(e.error==='canceled'||e.error==='interrupted')return;
+    audioStatus(e.error==='not-allowed'
+      ?'المتصفح منع التشغيل. اضغط زر «استمع» مباشرة، وافتح الملف في المتصفح خارج معاينة الملفات.'
+      :'تعذر تشغيل النطق. تحقق من صوت الجهاز وتوفر صوت إنجليزي في إعداداته، ثم اضغط «استمع» مجددًا. جرّب فتح الملف مباشرة في Chrome أو Edge.');
+  };
+  speechWatchdog=setTimeout(()=>{
+    if(activeUtterance===u)audioStatus('لم يبدأ النطق. افتح الملف في المتصفح مباشرة، وتحقق من توفر صوت إنجليزي وصوت الجهاز، ثم اضغط «استمع» مجددًا.');
+  },6000);
+  try{synth.resume();synth.speak(u)}catch(e){u.onerror({error:'unavailable'})}
+}
+function laterInSession(callback,delay){
+  const owner=session,index=owner?.index;
+  setTimeout(()=>{if(session===owner&&session&&session.index===index)callback()},delay);
+}
+
 function scopeWords(){
   let words=[];
   if(state.scope==='all')words=allWords;
@@ -600,8 +652,8 @@ function openWord(id){
     </div>`;
   $('wordOverlay').classList.add('show');$('wordOverlay').setAttribute('aria-hidden','false');
 }
-function escAttr(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,' ')}
-function closeWord(){$('wordOverlay').classList.remove('show');$('wordOverlay').setAttribute('aria-hidden','true');currentWord=null}
+function escAttr(s){return esc(String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,' '))}
+function closeWord(){stopSpeech();$('wordOverlay').classList.remove('show');$('wordOverlay').setAttribute('aria-hidden','true');currentWord=null}
 function rateWord(level){
   if(!currentWord)return;
   let m=mastery(currentWord.id);
@@ -617,17 +669,14 @@ const modeNames={
   match:'المطابقة',typeMeaning:'اكتب الكلمة',example:'الكلمة في سياق',quick:'مراجعة سريعة',test:'اختبار متنوع'
 };
 function buildSessionWords(mode){
+  const base=scopeWords();
   if(mode==='due'){
-    let due=allWords.filter(isDue);
-    if(!due.length) due=allWords.filter(w=>!mastered(w.id));
-    return shuffle(due).slice(0,14);
+    const due=base.filter(isDue);
+    const words=due.length?due:base.filter(w=>!mastered(w.id));
+    if(!words.length)toast('لا توجد كلمات مستحقة في النطاق المحدد.');
+    return shuffle(words);
   }
-  const base=scopeWords();if(!base.length)return [];
-  const size=(mode==='flash'||mode==='quick')?16:(mode==='match'?6:12);
-  let prioritized=[...base].sort((a,b)=>mastery(a.id)-mastery(b.id));
-  const first=prioritized.slice(0,Math.min(Math.ceil(size*.65),prioritized.length));
-  const rest=shuffle(prioritized.slice(first.length));
-  return shuffle([...first,...rest.slice(0,Math.max(0,size-first.length))]).slice(0,size);
+  return shuffle(base);
 }
 function startMode(mode){
   const words=buildSessionWords(mode);if(!words.length)return;
@@ -637,6 +686,7 @@ function startMode(mode){
   if(mode==='match')renderMatch();else renderSessionItem();
 }
 function closeSession(){
+  stopSpeech();
   $('overlay').classList.remove('show');$('overlay').setAttribute('aria-hidden','true');session=null;matchState=null;renderWords();updateStats();
 }
 function current(){return session?.words[session.index]}
@@ -710,7 +760,7 @@ function renderChoice(mode){
   const w=current();let prompt='',correct='',choices=[],after='';
   if(mode==='enAr'){prompt=w.word;correct=w.translation;choices=[correct,...otherValues(w,'translation')]}
   if(mode==='arEn'){prompt=w.translation;correct=w.word;choices=[correct,...otherValues(w,'word')]}
-  if(mode==='listen'){prompt='🎧 استمع ثم اختر الكلمة';correct=w.word;choices=[correct,...otherValues(w,'word')];after=`<button class="btn primary" onclick="speak('${escAttr(w.word)}')">🔊 تشغيل مرة أخرى</button>`;setTimeout(()=>speak(w.word),220)}
+  if(mode==='listen'){prompt='🎧 استمع ثم اختر الكلمة';correct=w.word;choices=[correct,...otherValues(w,'word')];after=`<button class="btn primary" onclick="speak('${escAttr(w.word)}')">🔊 تشغيل مرة أخرى</button>`;laterInSession(()=>speak(w.word),220)}
   if(mode==='cloze'){prompt=clozeSentence(w);correct=w.word;choices=[correct,...otherValues(w,'word')]}
   choices=shuffle(choices);
   $('sessionBody').innerHTML=`
@@ -729,7 +779,7 @@ function answerChoice(btn,correct){
     if(b===btn&&!ok)b.classList.add('wrong');b.disabled=true;
   });
   const f=$('feedback');f.className='feedback '+(ok?'ok':'no');
-  if(ok){f.textContent='ممتاز! إجابة صحيحة ✓';session.correct++;markAnswer(w,true);confetti();setTimeout(nextItem,650)}
+  if(ok){f.textContent='ممتاز! إجابة صحيحة ✓';session.correct++;markAnswer(w,true);confetti();laterInSession(nextItem,650)}
   else{
     f.innerHTML=`ليست صحيحة. الإجابة: <b>${esc(correct)}</b>`;
     session.wrong.push(w);markAnswer(w,false);
@@ -742,7 +792,7 @@ function renderTyping(mode){
   const help=mode==='spell'
     ? `<button class="btn primary" onclick="speak('${escAttr(w.word)}')">🔊 استمع مرة أخرى</button>`
     : `<div class="sessionMeta" style="text-align:center">اكتب الكلمة الإنجليزية المناسبة</div>`;
-  if(mode==='spell')setTimeout(()=>speak(w.word),220);
+  if(mode==='spell')laterInSession(()=>speak(w.word),220);
   $('sessionBody').innerHTML=`
     <div class="bigPrompt" style="font-size:clamp(1.6rem,5vw,2.8rem)">${esc(prompt)}</div>
     <div class="centerActions">${help}</div>
@@ -805,7 +855,7 @@ function quickRate(ok){
 }
 function renderMatch(){
   updateSessionBar();
-  const pairs=session.words.slice(0,6);
+  const pairs=session.words.slice(session.index,session.index+6);
   matchState={left:null,right:null,done:0,pairs};
   const left=shuffle(pairs),right=shuffle(pairs);
   $('sessionBody').innerHTML=`
@@ -827,7 +877,7 @@ function pickMatch(btn){
   if(ok){
     [matchState.left,matchState.right].forEach(x=>{x.classList.remove('selected');x.classList.add('done')});
     matchState.done++;session.correct++;markAnswer(w,true);reward(2);$('feedback').textContent='تطابق صحيح ✓';$('feedback').className='feedback ok';
-    if(matchState.done===matchState.pairs.length){setTimeout(renderMatchResult,500)}
+    if(matchState.done===matchState.pairs.length){laterInSession(renderMatchResult,500)}
   }else{
     [matchState.left,matchState.right].forEach(x=>x.classList.add('wrong'));
     $('feedback').textContent='جرّب مرة أخرى';$('feedback').className='feedback no';
@@ -836,7 +886,9 @@ function pickMatch(btn){
   if(ok){matchState.left=null;matchState.right=null}
 }
 function renderMatchResult(){
-  session.index=session.words.length;renderResult();
+  if(!session||!matchState)return;
+  session.index+=matchState.pairs.length;
+  if(session.index>=session.words.length)renderResult();else renderMatch();
 }
 function renderResult(){
   $('sessionBar').style.width='100%';
